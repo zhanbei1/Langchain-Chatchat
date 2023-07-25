@@ -1,33 +1,45 @@
-import os
-from langchain import PromptTemplate, OpenAI, LLMChain
-import requests
+# 添加自定义Node支持本项目API接口，本地部署langflow实现对话功能
+# 当前功能还很少，主要为了演示自定义langflow节点
+
+
+# 运行方式：
+# 1. 安装python=3.9或3.10(推荐)，或者新建一个对应版本的虚拟环境
+# 2. 安装langchain & langflow & uvicorn
+# 3. 运行python chat_flow.py
+
+
+# Todo：
+# 1. 当前只添加了最简单的LLM节点，支持的参数也有限。
+#    需要与API接口同步更新接口参数
+# 2. 暂不支持流式输出
+#    正在开发当中。langflow本身输出能力有限，考虑与streamlit集成
+# 3. 暂不支持知识库
+# 4. 结合项目实现，添加更多的自定义Node
+
+
+# from langchain import PromptTemplate, OpenAI, LLMChain
 from typing import *
+import requests
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
 from langchain.callbacks.manager import CallbackManagerForLLMRun
 from langchain.llms.base import LLM
 from langchain.llms.utils import enforce_stop_tokens
 from langflow import lcserve
 from langflow.main import app
-# from chainlit.server import app
-from pathlib import Path
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-
 from langflow.interface import types
+from langflow.interface import custom_lists
+from langflow.custom import customs
+from langflow.interface.llms import base
+from langflow.interface.llms.base import llm_creator
+from langflow.template.frontend_node.llms import LLMFrontendNode
+from langflow.template.template.base import Template
+from langflow.template.field.base import TemplateField
 
 
 class ChatGLM(LLM):
     """ChatGLM LLM service.
-
-    Example:
-        .. code-block:: python
-
-            from langchain.llms import ChatGLM
-            endpoint_url = (
-                "http://127.0.0.1:8000"
-            )
-            ChatGLM_llm = ChatGLM(
-                endpoint_url=endpoint_url
-            )
+        参照langchain.llms.ChatGLM修改而来
     """
 
     endpoint_url: str = "http://127.0.0.1:7861/chat"
@@ -43,6 +55,7 @@ class ChatGLM(LLM):
     top_p: float = 0.7
     """Top P for nucleus sampling from 0 to 1"""
     streaming: bool = False
+    history_len: int = 3  # 暂时自己维护history，后面可以改用langchain memory
 
     @property
     def _llm_type(self) -> str:
@@ -62,6 +75,7 @@ class ChatGLM(LLM):
         prompt: str,
         stop: Optional[List[str]] = None,
         run_manager: Optional[CallbackManagerForLLMRun] = None,
+        streaming: bool = False,
         **kwargs: Any,
     ) -> str:
         """Call out to a ChatGLM LLM inference endpoint.
@@ -78,7 +92,6 @@ class ChatGLM(LLM):
 
                 response = chatglm_llm("Who are you?")
         """
-
         _model_kwargs = self.model_kwargs or {}
 
         # HTTP headers for authorization
@@ -88,56 +101,82 @@ class ChatGLM(LLM):
             "question": prompt,
             # "prompt": prompt,
             # "temperature": self.temperature,
-            "history": self.history,
+            "history": self.history[-self.history_len:],
             # "max_length": self.max_token,
             # "top_p": self.top_p,
+            # "streaming": streaming,
         }
         # payload.update(_model_kwargs)
         # payload.update(kwargs)
 
         # print("ChatGLM payload:", payload)
+        if streaming:
+            return 'streaming not work yet'
+            try:
+                response = requests.post(
+                    self.endpoint_url,
+                    json=payload,
+                    stream=True,
+                )
 
-        # call api
-        try:
-            response = requests.post(self.endpoint_url, headers=headers, json=payload)
-        except requests.exceptions.RequestException as e:
-            raise ValueError(f"Error raised by inference endpoint: {e}")
+            except requests.exceptions.RequestException as e:
+                raise ValueError(f"Error raised by inference endpoint: {e}")
 
-        # print("ChatGLM resp:", response)
+            if response.status_code != 200:
+                raise ValueError(f"Failed with response: {response}")
 
-        if response.status_code != 200:
-            raise ValueError(f"Failed with response: {response}")
+            # for x in response.iter_content(None):
+            #     yield x.decode() 
 
-        try:
-            parsed_response = response.json()
+        else:
+            try:
+                response = requests.post(
+                    self.endpoint_url, headers=headers, json=payload)
+            except requests.exceptions.RequestException as e:
+                raise ValueError(f"Error raised by inference endpoint: {e}")
 
-            # Check if response content does exists
-            if isinstance(parsed_response, dict):
-                content_keys = "response"
-                if content_keys in parsed_response:
-                    text = parsed_response[content_keys]
+            # print("ChatGLM resp:", response)
+
+            if response.status_code != 200:
+                raise ValueError(f"Failed with response: {response}")
+
+            try:
+                parsed_response = response.json()
+
+                # Check if response content does exists
+                if isinstance(parsed_response, dict):
+                    content_keys = "response"
+                    if content_keys in parsed_response:
+                        text = parsed_response[content_keys]
+                    else:
+                        raise ValueError(f"No content in response : {parsed_response}")
                 else:
-                    raise ValueError(f"No content in response : {parsed_response}")
-            else:
-                raise ValueError(f"Unexpected response type: {parsed_response}")
+                    raise ValueError(f"Unexpected response type: {parsed_response}")
 
-        except requests.exceptions.JSONDecodeError as e:
-            raise ValueError(
-                f"Error raised during decoding response from inference endpoint: {e}."
-                f"\nResponse: {response.text}"
-            )
+            except requests.exceptions.JSONDecodeError as e:
+                raise ValueError(
+                    f"Error raised during decoding response from inference endpoint: {e}."
+                    f"\nResponse: {response.text}"
+                )
 
-        if stop is not None:
-            text = enforce_stop_tokens(text, stop)
-        self.history = self.history + [[None, parsed_response["response"]]]
-        return text
+            if stop is not None:
+                text = enforce_stop_tokens(text, stop)
+            self.history = self.history + [[None, parsed_response["response"]]]
+            return text
+
+    # async def acall(
+    #     self,
+    #     prompt: str,
+    #     stop: Optional[List[str]] = None,
+    #     run_manager: Optional[CallbackManagerForLLMRun] = None,
+    #     streaming: bool = False,
+    #     **kwargs: Any,
+    # ) -> str:
+    #     breakpoint()
+    #     return self._call(prompt,stop,run_manager,streaming,**kwargs)
 
 
-template = """问题: {question}
-
-答案: 让我们逐步思考。"""
-
-
+# 配置langflow运行环境
 path = Path(lcserve.__file__).parent
 static_files_dir = path / "frontend"
 app.mount(
@@ -146,55 +185,50 @@ app.mount(
     name="static",
 )
 
-from langflow.template.field.base import TemplateField
-from langflow.template.frontend_node.llms import LLMFrontendNode
-from langflow.template.template.base import Template
-from langflow.interface.llms.base import llm_creator
-from langflow.interface.llms import base
-from langflow.custom import customs
-from langflow.interface import custom_lists
-from langflow.api.v1 import endpoints
 
-
-class ChatGLMNode(LLMFrontendNode):
-    name='ChatGLM'
-    description='chatglm llm'
-    base_classes :List[str] =['ChatGLM', 'BaseLLM', 'BaseLanguageModel']
-    template=Template(
-        type_name='ChatGLM',
-        fields=[
-            TemplateField(
-                name='question'
-            )
-        ]
-    )
-
+# 当前是直接把Node以json的形式写到types.langchain_types_dict
+# 后续考虑使用自定义Node来实现
+# class ChatGLMNode(LLMFrontendNode):
+#     name = 'ChatGLM'
+#     description = 'chatglm llm'
+#     base_classes: List[str] = ['ChatGLM', 'BaseLLM', 'BaseLanguageModel']
+#     template = Template(
+#         type_name='ChatGLM',
+#         fields=[
+#             TemplateField(
+#                 name='question'
+#             )
+#         ]
+#     )
 # customs.CUSTOM_NODES.setdefault('llms', {})
 # customs.CUSTOM_NODES['llms'].update(
 #     ChatGLM = ChatGLMNode(),
 # )
+
+
+# 把自定义模式加入到langflow数据结构中
 custom_lists.CUSTOM_NODES.update(
-    ChatGLM = ChatGLM,
+    ChatGLM=ChatGLM,
 )
 
-types.langchain_types_dict['llms']['ChatGLM']={
+types.langchain_types_dict['llms']['ChatGLM'] = {
     'name': 'ChatGLM',
     'display_name': 'ChatGLM',
     'template': {
         'endpoint_url': TemplateField(
-                        name='endpoint_url',
-                        value='http://127.0.0.1:7861/chat',
-                    ).to_dict(),
+            name='endpoint_url',
+            value='http://127.0.0.1:7861/chat',
+        ).to_dict(),
         'prompt': TemplateField(
-                        name='prompt',
-                        value='hello',
-                    ).to_dict(),
+            name='prompt',
+            value='hello',
+        ).to_dict(),
         'streaming': TemplateField(
-                        name='streaming',
-                        display_name='streaming',
-                        value=False,
-                        field_type='bool',
-                    ).to_dict(),
+            name='streaming',
+            display_name='streaming',
+            value=False,
+            field_type='bool',
+        ).to_dict(),
         '_type': 'ChatGLM',
     },
     'base_classes': ['ChatGLM', 'BaseLLM', 'BaseLanguageModel'],
@@ -205,9 +239,8 @@ base.llm_type_to_cls_dict['ChatGLM'] = ChatGLM
 llm_creator.type_dict['ChatGLM'] = ChatGLM
 
 
-llms = types.langchain_types_dict['llms']
-# breakpoint()
-types.langchain_types_dict = types.build_langchain_types_dict()
+# llms = types.langchain_types_dict['llms']
+# types.langchain_types_dict = types.build_langchain_types_dict()
 
 
 if __name__ == "__main__":
