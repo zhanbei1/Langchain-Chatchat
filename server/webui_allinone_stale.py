@@ -52,7 +52,7 @@ def launch_api(args,args_list=api_args,log_name=None):
 def launch_webui(args,args_list=web_args,log_name=None):
     print("Launching webui...")
     print("启动webui服务...")
-    venv_bin_path: str = os.path.join(sys.exec_prefix, 'bin')
+    venv_bin_path: str = os.path.join(os.path.dirname(sys.executable), 'bin')
     if not log_name:
         log_name = f"{LOG_PATH}webui"
 
