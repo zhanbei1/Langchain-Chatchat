@@ -20,6 +20,7 @@ from webui_pages.utils import *
 from streamlit_option_menu import option_menu
 from webui_pages import *
 import os
+import sys
 from server.llm_api_stale import string_args,launch_all,controller_args,worker_args,server_args,LOG_PATH
 
 from server.api_allinone_stale import parser, api_args
@@ -52,7 +53,7 @@ def launch_api(args,args_list=api_args,log_name=None):
 def launch_webui(args,args_list=web_args,log_name=None):
     print("Launching webui...")
     print("启动webui服务...")
-    venv_bin_path: str = os.path.join(sys.exec_prefix, 'bin')
+    venv_bin_path: str = os.path.join(os.path.dirname(sys.executable), 'bin')
     if not log_name:
         log_name = f"{LOG_PATH}webui"
 
