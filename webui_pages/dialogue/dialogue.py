@@ -24,13 +24,13 @@ def get_messages_history(history_len: int, content_in_expander: bool = False) ->
 
     def filter(msg):
         content = [x for x in msg["elements"] if x._output_method in ["markdown", "text"]]
-        if not content_in_expander:
-            content = [x for x in content if not x._in_expander]
-        content = [x.content for x in content]
+        # if not content_in_expander:
+        #     content = [x for x in content if not x._in_expander]
+        # content = [x.content for x in content]
 
         return {
             "role": msg["role"],
-            "content": "\n\n".join(content),
+            "content": content[0] if content else "",
         }
 
     return chat_box.filter_history(history_len=history_len, filter=filter)
@@ -178,13 +178,13 @@ def dialogue_page(api: ApiRequest):
                     chat_box.update_msg(text, element_index=0)
                 elif chunk := d.get("tools"):
                     element_index += 1
-                    chat_box.insert_msg(Markdown("...", in_expander=True, title="使用工具...", state="complete"))
+                    chat_box.insert_msg(Markdown("...", in_expander=True, title="使用工具..."))
                     chat_box.update_msg("\n\n".join(d.get("tools", [])), element_index=element_index, streaming=False)
             chat_box.update_msg(text, element_index=0, streaming=False)
         elif dialogue_mode == "知识库问答":
             chat_box.ai_say([
                 f"正在查询知识库 `{selected_kb}` ...",
-                Markdown("...", in_expander=True, title="知识库匹配结果", state="complete"),
+                Markdown("...", in_expander=True, title="知识库匹配结果"),
             ])
             text = ""
             for d in api.knowledge_base_chat(prompt,
@@ -204,7 +204,7 @@ def dialogue_page(api: ApiRequest):
         elif dialogue_mode == "搜索引擎问答":
             chat_box.ai_say([
                 f"正在执行 `{search_engine}` 搜索...",
-                Markdown("...", in_expander=True, title="网络搜索结果", state="complete"),
+                Markdown("...", in_expander=True, title="网络搜索结果"),
             ])
             text = ""
             for d in api.search_engine_chat(prompt,
